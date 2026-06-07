@@ -281,7 +281,7 @@ def get_signal_baseline(
 
     values = [r["value"] for r in rows]
     if len(values) < 2:
-        return 0.0, 1.0  # no baseline yet; avoid division by zero
+        return None, None  # cold start: no baseline yet
     mean = sum(values) / len(values)
     var = sum((v - mean) ** 2 for v in values) / len(values)
     return mean, var ** 0.5

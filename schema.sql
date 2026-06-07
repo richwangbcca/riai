@@ -108,20 +108,30 @@ CREATE INDEX IF NOT EXISTS idx_scores_attention ON scores(ts, attention_index);
 
 -- ---------------------------------------------------------------------------
 -- Convenience views for the dashboard / API (latest run only)
+-- Views are dropped and recreated so schema changes take effect on existing DBs.
 -- ---------------------------------------------------------------------------
-CREATE VIEW IF NOT EXISTS latest_run AS
+DROP VIEW IF EXISTS latest_run;
+CREATE VIEW latest_run AS
     SELECT MAX(ts) AS ts FROM scores;
 
-CREATE VIEW IF NOT EXISTS top_topics AS
+-- Low-confidence topics (insufficient history) are sorted to the bottom so
+-- well-established topics always rank above cold-start noise.
+DROP VIEW IF EXISTS top_topics;
+CREATE VIEW top_topics AS
     SELECT s.*, t.canonical_name, t.wikipedia_title, t.low_confidence
     FROM scores s
     JOIN topics t USING (topic_id)
     WHERE s.ts = (SELECT ts FROM latest_run)
-    ORDER BY s.attention_index DESC;
+    ORDER BY t.low_confidence ASC, s.attention_index DESC;
 
-CREATE VIEW IF NOT EXISTS emerging_topics AS
+-- Emerging topics excludes low-confidence topics entirely: a brand-new topic
+-- with no baseline cannot meaningfully be called "emerging".
+DROP VIEW IF EXISTS emerging_topics;
+CREATE VIEW emerging_topics AS
     SELECT s.*, t.canonical_name, t.wikipedia_title, t.low_confidence
     FROM scores s
     JOIN topics t USING (topic_id)
-    WHERE s.ts = (SELECT ts FROM latest_run) AND s.emerging = 1
+    WHERE s.ts = (SELECT ts FROM latest_run)
+      AND s.emerging = 1
+      AND t.low_confidence = 0
     ORDER BY s.momentum DESC;

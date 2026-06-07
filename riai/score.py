@@ -29,6 +29,9 @@ def _logistic(z: float, k: float = 1.0, midpoint: float = 2.0) -> float:
         return 0.0 if z < midpoint else 1.0
 
 
+_COLD_START_SCORE = 0.15  # topic is active but has no baseline to compare against
+
+
 def _zscore_normalize(
     conn: sqlite3.Connection,
     topic_id: str,
@@ -40,7 +43,10 @@ def _zscore_normalize(
     """
     Compute z-score of current_value against its own rolling baseline,
     then squash to 0-1 with a logistic.
-    Returns 0.0 if no baseline exists yet (cold start).
+
+    Cold start (< 2 baseline samples): return a fixed low score rather than
+    treating the raw value as a z-score. Without history, raw pageview counts
+    in the tens of thousands would produce absurdly high z-scores.
     """
     baseline_days = cfg.get("baseline_days", 7)
     k = cfg.get("logistic_k", 1.0)
@@ -51,11 +57,13 @@ def _zscore_normalize(
         conn, topic_id, source, signal,
         days=baseline_days, current_hour_of_day=current_hour,
     )
+    if mean is None:
+        # Cold start: no baseline. Mark as active but don't inflate the score.
+        return _COLD_START_SCORE
+
     if std < 1e-9:
-        # No variance in baseline: use raw value relative to mean
-        if current_value <= mean:
-            return 0.0
-        return _logistic(1.0, k, midpoint)
+        # Baseline exists but no variance (signal always the same value).
+        return 0.0 if current_value <= mean else _logistic(1.0, k, midpoint)
 
     z = (current_value - mean) / std
     return _logistic(z, k, midpoint)
@@ -157,7 +165,9 @@ def _compute_anomaly_z(
     ).fetchall()
 
     values = [r["attention_index"] for r in rows]
-    if len(values) < 3:
+    # Require at least 6 samples (~6 hours at hourly scoring) before trusting the z-score.
+    # With fewer samples the std is too noisy and any small spike looks anomalous.
+    if len(values) < 6:
         return 0.0
 
     mean = sum(values) / len(values)
