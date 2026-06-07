@@ -156,25 +156,22 @@ def insert_event(
     raw: dict[str, Any] | None = None,
 ) -> int | None:
     """Insert event; returns new rowid or None if duplicate."""
-    try:
-        cur = conn.execute(
-            """
-            INSERT INTO events(source, external_id, ts, title, url, topic_id, raw)
-            VALUES (?,?,?,?,?,?,?)
-            """,
-            (
-                source,
-                external_id,
-                ts,
-                title,
-                url,
-                topic_id,
-                json.dumps(raw) if raw else None,
-            ),
-        )
-        return cur.lastrowid
-    except sqlite3.IntegrityError:
-        return None  # duplicate
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO events(source, external_id, ts, title, url, topic_id, raw)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (
+            source,
+            external_id,
+            ts,
+            title,
+            url,
+            topic_id,
+            json.dumps(raw) if raw else None,
+        ),
+    )
+    return cur.lastrowid if cur.rowcount > 0 else None
 
 
 def assign_topic(conn: sqlite3.Connection, event_id: int, topic_id: str) -> None:

@@ -113,17 +113,22 @@ def _bump_signal(
 # ---------------------------------------------------------------------------
 
 def _wikipedia_stream_thread(
-    conn: sqlite3.Connection,
+    db_path: str,
     cfg: dict[str, Any],
     matching_cfg: dict[str, Any],
     last_event_id_holder: list[str | None],
 ) -> None:
+    # Each thread gets its own connection. Sharing one connection across threads
+    # causes exception state from one thread's failed statements to surface in
+    # the other thread. WAL mode handles concurrent writers from separate connections.
+    conn = storage.open_db(db_path)
+
     def on_event(payload: dict[str, Any]) -> None:
         ev = wp_source.parse_edit_event(payload)
         if ev is None:
             return
         if ev["is_bot"]:
-            return  # skip bot edits (reduce noise; bots still count for vandalism)
+            return
 
         topic_id = _ingest_event(
             conn,
@@ -138,8 +143,6 @@ def _wikipedia_stream_thread(
         )
         if topic_id:
             _bump_signal(conn, topic_id, "wikipedia", "edit_count")
-            # unique_editors: approximate with a per-hour set in memory (best effort)
-            # we track in the bucket; actual uniqueness needs in-memory dedup (see below)
         conn.commit()
 
     log.info("Wikipedia EventStreams thread starting")
@@ -151,6 +154,8 @@ def _wikipedia_stream_thread(
         )
     except Exception as exc:
         log.error("EventStreams thread crashed: %s", exc)
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -302,10 +307,12 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
 
     last_event_id: list[str | None] = [storage.get_meta(conn, "wp_last_event_id")]
 
-    # Start EventStreams SSE in background thread (runs forever)
+    # Start EventStreams SSE in background thread (runs forever).
+    # Passes db path, not conn — thread opens its own connection to avoid
+    # shared-connection state corruption between threads.
     wp_thread = threading.Thread(
         target=_wikipedia_stream_thread,
-        args=(conn, cfg, matching_cfg, last_event_id),
+        args=(db, cfg, matching_cfg, last_event_id),
         daemon=True,
         name="wp-eventstreams",
     )
