@@ -123,7 +123,17 @@ def _wikipedia_stream_thread(
     # the other thread. WAL mode handles concurrent writers from separate connections.
     conn = storage.open_db(db_path)
 
+    # Batch commits: flush every 20 events or every 5 seconds, whichever comes first.
+    # Committing on every single edit (can be 30+/sec) holds the write lock too
+    # frequently and causes "database is locked" on the main thread.
+    _BATCH_SIZE = 20
+    _BATCH_SECS = 5.0
+    batch_count = 0
+    last_commit_time = time.monotonic()
+
     def on_event(payload: dict[str, Any]) -> None:
+        nonlocal batch_count, last_commit_time
+
         ev = wp_source.parse_edit_event(payload)
         if ev is None:
             return
@@ -143,7 +153,13 @@ def _wikipedia_stream_thread(
         )
         if topic_id:
             _bump_signal(conn, topic_id, "wikipedia", "edit_count")
-        conn.commit()
+
+        batch_count += 1
+        now = time.monotonic()
+        if batch_count >= _BATCH_SIZE or (now - last_commit_time) >= _BATCH_SECS:
+            conn.commit()
+            batch_count = 0
+            last_commit_time = now
 
     log.info("Wikipedia EventStreams thread starting")
     try:
@@ -192,15 +208,13 @@ def _poll_pageviews(
 # News poll
 # ---------------------------------------------------------------------------
 
-def _poll_news(
+def _poll_rss(
     conn: sqlite3.Connection,
     cfg: dict[str, Any],
     matching_cfg: dict[str, Any],
 ) -> None:
     news_cfg = cfg.get("news", {})
     bucket = storage.hour_bucket()
-
-    # RSS
     log.info("Polling RSS feeds...")
     articles = news_source.poll_all_rss(news_cfg)
     topic_publisher_map: dict[str, set[str]] = {}
@@ -222,11 +236,19 @@ def _poll_news(
             if topic_id not in topic_publisher_map:
                 topic_publisher_map[topic_id] = set()
             topic_publisher_map[topic_id].add(article.get("publisher", ""))
-
     for tid, publishers in topic_publisher_map.items():
         _bump_signal(conn, tid, "news", "publisher_count", float(len(publishers)), bucket)
+    conn.commit()
+    log.info("RSS: %d articles", len(articles))
 
-    # GDELT
+
+def _poll_gdelt(
+    conn: sqlite3.Connection,
+    cfg: dict[str, Any],
+    matching_cfg: dict[str, Any],
+) -> None:
+    news_cfg = cfg.get("news", {})
+    bucket = storage.hour_bucket()
     log.info("Polling GDELT...")
     mentions = news_source.fetch_gdelt_mentions(news_cfg)
     for mention in mentions:
@@ -244,9 +266,8 @@ def _poll_news(
         )
         if topic_id:
             _bump_signal(conn, topic_id, "news", "article_count", 1.0, bucket)
-
     conn.commit()
-    log.info("News: %d RSS articles, %d GDELT mentions", len(articles), len(mentions))
+    log.info("GDELT: %d mentions", len(mentions))
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +322,8 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
     retention_cfg = cfg.get("retention", {})
 
     poll_interval_reddit = cfg.get("reddit", {}).get("poll_minutes", 5) * 60
-    poll_interval_news = cfg.get("news", {}).get("rss_poll_minutes", 5) * 60
+    poll_interval_rss = cfg.get("news", {}).get("rss_poll_minutes", 5) * 60
+    poll_interval_gdelt = cfg.get("news", {}).get("gdelt_poll_minutes", 30) * 60
     poll_interval_pv = cfg.get("wikipedia", {}).get("pageviews_poll_minutes", 60) * 60
     poll_interval_dashboard = dashboard_cfg.get("regenerate_minutes", 5) * 60
 
@@ -321,7 +343,8 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
     # Track last poll times
     last: dict[str, float] = {
         "pageviews": 0.0,
-        "news": 0.0,
+        "rss": 0.0,
+        "gdelt": 0.0,
         "reddit": 0.0,
         "score": 0.0,
         "dashboard": 0.0,
@@ -347,12 +370,19 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
                 log.error("Pageviews poll error: %s", exc)
             last["pageviews"] = now
 
-        if now - last["news"] >= poll_interval_news:
+        if now - last["rss"] >= poll_interval_rss:
             try:
-                _poll_news(conn, cfg, matching_cfg)
+                _poll_rss(conn, cfg, matching_cfg)
             except Exception as exc:
-                log.error("News poll error: %s", exc)
-            last["news"] = now
+                log.error("RSS poll error: %s", exc)
+            last["rss"] = now
+
+        if now - last["gdelt"] >= poll_interval_gdelt:
+            try:
+                _poll_gdelt(conn, cfg, matching_cfg)
+            except Exception as exc:
+                log.error("GDELT poll error: %s", exc)
+            last["gdelt"] = now
 
         if now - last["reddit"] >= poll_interval_reddit:
             try:

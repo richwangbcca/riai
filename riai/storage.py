@@ -20,7 +20,9 @@ def _apply_schema(conn: sqlite3.Connection) -> None:
 
 
 def open_db(path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, check_same_thread=False)
+    # timeout=30: wait up to 30s for the write lock before raising "database is locked".
+    # WAL mode lets readers proceed concurrently, but writers still serialize.
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
     _apply_schema(conn)
     return conn

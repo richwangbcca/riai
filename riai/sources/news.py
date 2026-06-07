@@ -91,6 +91,9 @@ def fetch_gdelt_mentions(cfg: dict[str, Any]) -> list[dict[str, Any]]:
         resp = requests.get(
             _GDELT_DOC_API, headers={"User-Agent": ua}, timeout=20
         )
+        if resp.status_code == 429:
+            log.warning("GDELT rate-limited (429); skipping this cycle")
+            return []
         resp.raise_for_status()
         data = resp.json()
     except (requests.RequestException, ValueError) as exc:

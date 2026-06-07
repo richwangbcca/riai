@@ -40,7 +40,7 @@ wikipedia:
 # ---------------------------------------------------------------------------
 news:
   gdelt_base: "http://data.gdelt.org"
-  gdelt_poll_minutes: 15
+  gdelt_poll_minutes: 30
   rss_feeds:
     - url: "https://feeds.bbci.co.uk/news/rss.xml"
       name: "BBC News"
