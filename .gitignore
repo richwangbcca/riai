@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# DB
+*.db
+*.db-wal
+*.db-shm
+
+# Generated dashboard
+riai/dashboard/index.html
+
+# Secrets / local overrides
+.env
+*.local.yaml
+
+# macOS
+.DS_Store

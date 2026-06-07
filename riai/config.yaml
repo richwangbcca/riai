@@ -1,0 +1,106 @@
+# RIAI configuration — edit weights, thresholds, and source settings here.
+# All weights and thresholds are hot-reloaded each scoring run (no restart needed).
+
+db_path: riai.db
+
+# ---------------------------------------------------------------------------
+# Composite attention index weights (must sum to 1.0)
+# ---------------------------------------------------------------------------
+weights:
+  wikipedia: 0.40   # edits + pageviews
+  news:       0.35   # GDELT + RSS
+  reddit:     0.20
+  search:     0.05   # delayed / optional; effectively 0 until enabled
+
+# ---------------------------------------------------------------------------
+# Scoring / normalization
+# ---------------------------------------------------------------------------
+scoring:
+  baseline_days: 7          # rolling baseline window length
+  zscore_threshold: 2.5     # stddevs above baseline to flag emerging
+  ewma_alpha: 0.3           # EWMA smoothing factor (0=slow, 1=instant)
+  logistic_k: 1.0           # steepness of the logistic squash
+  logistic_midpoint: 2.0    # z-score midpoint of the squash (center)
+  min_events_for_confidence: 10   # events before low_confidence is cleared
+
+# ---------------------------------------------------------------------------
+# Wikipedia EventStreams
+# ---------------------------------------------------------------------------
+wikipedia:
+  eventstreams_url: "https://stream.wikimedia.org/v2/stream/recentchange"
+  pageviews_base: "https://wikimedia.org/api/rest_v1/metrics/pageviews"
+  pageviews_poll_minutes: 60   # pageviews lag ~1h; no point polling faster
+  excluded_namespaces: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  # namespace 0 = main articles; all others are talk/project/template pages
+  lang: "en"
+  user_agent: "RIAI/1.0 (https://github.com/riai-project; richwangbcca@gmail.com)"
+
+# ---------------------------------------------------------------------------
+# News sources
+# ---------------------------------------------------------------------------
+news:
+  gdelt_base: "http://data.gdelt.org"
+  gdelt_poll_minutes: 15
+  rss_feeds:
+    - url: "https://feeds.bbci.co.uk/news/rss.xml"
+      name: "BBC News"
+    - url: "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml"
+      name: "NYT"
+    - url: "https://feeds.reuters.com/reuters/topNews"
+      name: "Reuters"
+    - url: "https://www.theguardian.com/world/rss"
+      name: "Guardian World"
+    - url: "https://feeds.washingtonpost.com/rss/world"
+      name: "WashPost World"
+    - url: "https://rss.ap.org/article/APTopStories"
+      name: "AP"
+    - url: "https://feeds.skynews.com/feeds/rss/home.xml"
+      name: "Sky News"
+    - url: "https://feeds.a.dj.com/rss/RSSWorldNews.xml"
+      name: "WSJ World"
+  rss_poll_minutes: 5
+  user_agent: "RIAI/1.0 (https://github.com/riai-project; richwangbcca@gmail.com)"
+
+# ---------------------------------------------------------------------------
+# Reddit
+# ---------------------------------------------------------------------------
+reddit:
+  subreddits:
+    - news
+    - worldnews
+    - politics
+    - science
+    - sports
+    - entertainment
+    - television
+    - movies
+    - music
+    - offbeat
+  poll_minutes: 5
+  posts_per_sub: 25        # top posts per fetch
+  user_agent: "RIAI/1.0 (https://github.com/riai-project; richwangbcca@gmail.com)"
+
+# ---------------------------------------------------------------------------
+# Data retention
+# ---------------------------------------------------------------------------
+retention:
+  raw_events_days: 30       # purge raw events older than this
+  signals_days: 90          # keep hourly signal buckets 90 days
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+dashboard:
+  output_path: "dashboard/index.html"
+  top_n: 50                 # topics shown in main feed
+  emerging_n: 20            # topics shown in emerging list
+  sparkline_hours: 24       # hours of history in sparklines
+  regenerate_minutes: 5     # how often the poller rebuilds the HTML
+
+# ---------------------------------------------------------------------------
+# Topic matching
+# ---------------------------------------------------------------------------
+matching:
+  fuzzy_threshold: 85       # RapidFuzz score cutoff (0-100)
+  embedding_threshold: 0.82 # cosine similarity cutoff for merge
+  embedding_model: "all-MiniLM-L6-v2"  # sentence-transformers model

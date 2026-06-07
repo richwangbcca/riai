@@ -1,0 +1,11 @@
+requests>=2.31
+sseclient-py>=1.8
+feedparser>=6.0
+pyyaml>=6.0
+spacy>=3.7
+rapidfuzz>=3.6
+yake>=0.4.8
+# duckdb>=0.10              # optional: swap in if SQLite analytical queries get slow
+# sentence-transformers>=2.6  # optional: embedding-based match fallback; requires torch
+#   install separately if needed: pip install sentence-transformers
+#   (torch wheels for Python 3.13 may require: pip install torch --index-url https://download.pytorch.org/whl/cpu)
