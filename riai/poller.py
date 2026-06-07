@@ -31,6 +31,7 @@ import storage
 import score as scoring
 import extract
 import match as matcher
+import enrich
 from sources import wikipedia as wp_source
 from sources import news as news_source
 from sources import reddit as reddit_source
@@ -397,6 +398,10 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
                 scoring.run_scoring(conn, weights, scoring_cfg)
             except Exception as exc:
                 log.error("Scoring error: %s", exc)
+            try:
+                enrich.enrich_missing_titles(conn, cfg, limit=30)
+            except Exception as exc:
+                log.error("Enrichment error: %s", exc)
             last["score"] = now
 
         if now - last["dashboard"] >= poll_interval_dashboard:
