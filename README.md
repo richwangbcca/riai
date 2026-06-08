@@ -1,0 +1,153 @@
+# RIAI — Real-Time Internet Attention Index
+
+A single-process Python system that watches Wikipedia edits, news feeds, and Reddit in real time and surfaces what the internet is paying attention to *right now*, ranked by activity and flagged when something is rising unusually fast.
+
+The output is a static HTML dashboard that regenerates every few minutes. No databases to manage, no cloud services, no API keys.
+
+> **Note:** this is a constructed heuristic index, not an objective measurement. It measures English-language internet activity across a handful of sources. The numbers are relative, not ground truth.
+
+---
+
+## How it works
+
+```
+Wikipedia EventStreams (real-time edits, SSE)  ─┐
+Wikipedia Pageviews API (hourly reader counts)  ─┤
+RSS feeds (BBC, Reuters, AP, NYT, etc.)         ─┼─► topic extraction ─► SQLite ─► score ─► dashboard
+GDELT (global news event stream)                ─┤
+Reddit RSS (broad subreddits)                   ─┘
+```
+
+Topics are extracted from titles using spaCy NER, fuzzy-matched against a canonical registry anchored on Wikipedia article names, and scored using a rolling z-score against their own 7-day baseline. Topics rising more than 2.5σ above their own baseline are flagged as **emerging**.
+
+Everything lives in a single SQLite file. One Python process. Currently hosted on a t3.micro EC2 instance.
+
+---
+
+## Setup
+
+**Requirements:** Python 3.11+
+
+```bash
+git clone https://github.com/richwangbcca/riai.git
+cd riai
+
+pip install -r requirements.txt
+python -m spacy download en_core_web_sm
+```
+
+The optional embedding-based topic matcher (third-tier fallback, rarely needed) requires PyTorch, which doesn't have pre-built wheels for Python 3.13 yet:
+
+```bash
+# Optional, skip if on Python 3.13
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install sentence-transformers
+```
+
+**Run:**
+
+```bash
+cd riai/
+python poller.py
+```
+
+The dashboard is written to `riai/dashboard/index.html` every 5 minutes. Serve it however you like — nginx, Caddy, `python -m http.server`, GitHub Pages, Cloudflare Pages.
+
+**As a systemd service:**
+
+```ini
+[Unit]
+Description=RIAI poller - updates DB and regenerates dashboard
+After=network.target
+
+[Service]
+WorkingDirectory=/home/ubuntu/riai
+ExecStart=/usr/bin/python3 poller.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now poller.service
+sudo journalctl -u poller.service -f
+```
+
+---
+
+## Configuration
+
+Everything tunable lives in `riai/config.yaml` — composite weights, z-score threshold, subreddit list, poll intervals, RSS feeds. The poller hot-reloads config on each scoring cycle, no restart needed.
+
+Key knobs:
+
+| Key | Default | What it does |
+|---|---|---|
+| `scoring.zscore_threshold` | 2.5 | σ above baseline to flag emerging |
+| `scoring.baseline_days` | 7 | rolling window for z-score baseline |
+| `weights.*` | see config | Wikipedia/news/Reddit/search composite weights |
+| `reddit.subreddits` | see config | which subreddits to poll |
+| `news.rss_feeds` | see config | RSS feed list |
+
+---
+
+## Sources
+
+| Source | What it provides | Cadence |
+|---|---|---|
+| Wikipedia EventStreams | Real-time edit stream (SSE) | Continuous |
+| Wikipedia Pageviews API | Hourly reader counts per article | Every 60 min |
+| RSS feeds (8 outlets) | Article titles and publication times | Every 5 min |
+| GDELT DOC API | Global news article stream | Every 30 min |
+| Reddit (10 subreddits) | Hot post titles via RSS | Every 5 min |
+
+No API keys required for any of these.
+
+---
+
+## Repo layout
+
+```
+riai/
+  poller.py          # entry point
+  score.py           # normalization, composite, momentum, emerging flag
+  extract.py         # title → candidate topics (spaCy NER + fallback)
+  match.py           # canonicalization + fuzzy/embedding match
+  enrich.py          # Wikipedia title lookup for non-Wikipedia topics
+  storage.py         # SQLite access layer
+  config.yaml        # all tunable parameters
+  sources/
+    wikipedia.py     # EventStreams + Pageviews
+    news.py          # GDELT + RSS
+    reddit.py        # subreddit RSS polling
+  dashboard/
+    build_static.py  # regenerate index.html
+  tests/
+schema.sql           # SQLite schema (applied on startup)
+requirements.txt
+```
+
+---
+
+## Known limitations
+
+- **English-language only.** This measures English-internet attention. A major event covered only in non-English media won't surface well.
+- **No manipulation resistance.** A coordinated edit campaign on Wikipedia or an astroturfed Reddit post can spike a topic. Out of scope to fix.
+- **Cold start takes ~6 hours.** Scores are z-scored against a 7-day rolling baseline. Until a topic has ~6 hours of history, it's marked low-confidence (~) and excluded from the Emerging list.
+- **No absolute volume.** Scores are relative — a 0.8 doesn't mean anything on its own, only compared to a topic's own history.
+
+---
+
+## TODOs
+
+- **Fix Emerging Topics table** — the table is oftentimes empty even after the poller has been running for several hours. When it is filled, there is no limit to the number of topics in the table.
+
+- **LLM summaries for trending topics** — add a batched enrichment step that calls a free-tier LLM (e.g. Claude Haiku via the Anthropic API, or a local model) once per refresh cycle to generate a one-line "why is this trending?" blurb for the top ~20 topics. Should pull recent article titles/headlines as context. Never per-event, always batched. Display inline in the dashboard.
+
+- **Validation harness** — pick 10–20 known past events with timestamps, backfill via Pageviews and GDELT history, and measure whether RIAI would have surfaced each one in the top movers. Currently untested end-to-end.
+
+- **Deduplicate near-duplicate topics** — "2026 FIFA World Cup" and "FIFA World Cup 2026" can end up as separate topics if they come from different sources before the matcher sees them. An offline periodic merge pass would clean this up.
+
+- **Remove grammatical articles** — Topics such as "The New York Knicks" do not link to the New York Knicks Wikipedia page.
