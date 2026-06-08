@@ -95,6 +95,9 @@ def fetch_gdelt_mentions(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             log.warning("GDELT rate-limited (429); skipping this cycle")
             return []
         resp.raise_for_status()
+        if not resp.content.strip():
+            log.debug("GDELT returned empty response; skipping")
+            return []
         data = resp.json()
     except (requests.RequestException, ValueError) as exc:
         log.warning("GDELT DOC API fetch failed: %s", exc)
