@@ -84,7 +84,7 @@ reddit:
 # Data retention
 # ---------------------------------------------------------------------------
 retention:
-  raw_events_days: 30       # purge raw events older than this
+  raw_events_days: 7       # purge raw events older than this
   signals_days: 90          # keep hourly signal buckets 90 days
 
 # ---------------------------------------------------------------------------
@@ -96,6 +96,14 @@ dashboard:
   emerging_n: 20            # topics shown in emerging list
   sparkline_hours: 24       # hours of history in sparklines
   regenerate_minutes: 5     # how often the poller rebuilds the HTML
+
+# ---------------------------------------------------------------------------
+# LLM summarization (requires ANTHROPIC_API_KEY env var)
+# ---------------------------------------------------------------------------
+summarize:
+  model: "claude-haiku-4-5-20251001"
+  top_n: 20
+  interval_minutes: 10
 
 # ---------------------------------------------------------------------------
 # Topic matching

@@ -126,6 +126,15 @@ CREATE VIEW top_topics AS
 
 -- Emerging topics excludes low-confidence topics entirely: a brand-new topic
 -- with no baseline cannot meaningfully be called "emerging".
+-- ---------------------------------------------------------------------------
+-- LLM-generated one-line summaries (why is this topic trending right now?)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS topic_summaries (
+    topic_id   TEXT PRIMARY KEY REFERENCES topics(topic_id) ON DELETE CASCADE,
+    summary    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 DROP VIEW IF EXISTS emerging_topics;
 CREATE VIEW emerging_topics AS
     SELECT s.*, t.canonical_name, t.wikipedia_title, t.low_confidence

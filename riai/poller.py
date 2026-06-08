@@ -32,6 +32,7 @@ import score as scoring
 import extract
 import match as matcher
 import enrich
+import summarize
 from sources import wikipedia as wp_source
 from sources import news as news_source
 from sources import reddit as reddit_source
@@ -148,7 +149,7 @@ def _wikipedia_stream_thread(
             ts=ev["ts"],
             title=ev["title"],
             url=ev["url"],
-            raw=payload,
+            raw=None,
             matching_cfg=matching_cfg,
             wikipedia_title=ev["title"],
         )
@@ -195,7 +196,7 @@ def _poll_pageviews(
             ts=bucket,
             title=item["title"],
             url=None,
-            raw=item,
+            raw=None,
             matching_cfg=matching_cfg,
             wikipedia_title=item["title"],
         )
@@ -229,7 +230,7 @@ def _poll_rss(
             ts=article["ts"],
             title=article["title"],
             url=article["url"],
-            raw=article,
+            raw=None,
             matching_cfg=matching_cfg,
         )
         if topic_id:
@@ -262,7 +263,7 @@ def _poll_gdelt(
             ts=mention["ts"],
             title=mention["title"],
             url=mention["url"],
-            raw=mention,
+            raw=None,
             matching_cfg=matching_cfg,
         )
         if topic_id:
@@ -295,7 +296,7 @@ def _poll_reddit(
             ts=post["ts"],
             title=post["title"],
             url=post["url"],
-            raw=post,
+            raw=None,
             matching_cfg=matching_cfg,
         )
         if topic_id:
@@ -327,6 +328,7 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
     poll_interval_gdelt = cfg.get("news", {}).get("gdelt_poll_minutes", 30) * 60
     poll_interval_pv = cfg.get("wikipedia", {}).get("pageviews_poll_minutes", 60) * 60
     poll_interval_dashboard = dashboard_cfg.get("regenerate_minutes", 5) * 60
+    poll_interval_summarize = cfg.get("summarize", {}).get("interval_minutes", 10) * 60
 
     last_event_id: list[str | None] = [storage.get_meta(conn, "wp_last_event_id")]
 
@@ -348,6 +350,7 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
         "gdelt": 0.0,
         "reddit": 0.0,
         "score": 0.0,
+        "summarize": 0.0,
         "dashboard": 0.0,
         "purge": 0.0,
     }
@@ -403,6 +406,13 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
             except Exception as exc:
                 log.error("Enrichment error: %s", exc)
             last["score"] = now
+
+        if now - last["summarize"] >= poll_interval_summarize:
+            try:
+                summarize.generate_summaries(conn, cfg)
+            except Exception as exc:
+                log.error("Summarize error: %s", exc)
+            last["summarize"] = now
 
         if now - last["dashboard"] >= poll_interval_dashboard:
             try:

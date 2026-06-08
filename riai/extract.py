@@ -35,6 +35,11 @@ _STOP_ENTITIES = frozenset({
 
 _ENTITY_LABELS = {"PERSON", "ORG", "GPE", "LOC", "EVENT", "FAC", "PRODUCT", "WORK_OF_ART", "LAW", "NORP"}
 
+# Single-word NORP extractions like "Canadian", "American", "Iranian" are demonym
+# adjectives, not topics. Only keep NORP entities if they're multi-word or are
+# a proper noun group name (e.g. "Democrats", "Taliban").
+_DEMONYM_SUFFIXES = ("an", "ish", "ese", "i", "ic", "ean")
+
 
 def extract_topics(title: str, source: str = "unknown") -> list[dict[str, Any]]:
     """
@@ -63,6 +68,9 @@ def extract_topics(title: str, source: str = "unknown") -> list[dict[str, Any]]:
                     continue
                 text = ent.text.strip()
                 if len(text) < 2 or text in _STOP_ENTITIES:
+                    continue
+                # Skip single-word NORP adjectives ("Canadian", "Iranian", etc.)
+                if ent.label_ == "NORP" and " " not in text and text.lower().endswith(_DEMONYM_SUFFIXES):
                     continue
                 candidates.append({
                     "text": text,

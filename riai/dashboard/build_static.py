@@ -81,6 +81,10 @@ def build(
         history = storage.get_score_history(conn, tid, hours=sparkline_hours)
         spark_data[tid] = [r["attention_index"] for r in history]
 
+    # Load summaries
+    summary_rows = conn.execute("SELECT topic_id, summary FROM topic_summaries").fetchall()
+    summaries: dict[str, str] = {r["topic_id"]: r["summary"] for r in summary_rows}
+
     # --- HTML ---
     def esc(s: str | None) -> str:
         return html.escape(s or "")
@@ -98,10 +102,12 @@ def build(
             if wiki_url else esc(r["canonical_name"])
         )
         lc = ' <sup title="Low confidence: not enough history">~</sup>' if r["low_confidence"] else ""
+        summary = summaries.get(tid, "")
+        summary_cell = f'<br><span class="summary">{esc(summary)}</span>' if summary else ""
         rows_top.append(
             f"<tr>"
             f"<td>{i}</td>"
-            f"<td>{name_cell}{lc}</td>"
+            f"<td>{name_cell}{lc}{summary_cell}</td>"
             f"<td>{_format_score(r['attention_index'])}</td>"
             f"<td>{_momentum_badge(r['momentum'])}&nbsp;{_format_score(r['momentum'])}</td>"
             f"<td>{spark}</td>"
@@ -121,9 +127,11 @@ def build(
             if wiki_url else esc(r["canonical_name"])
         )
         lc = ' <sup title="Low confidence">~</sup>' if r["low_confidence"] else ""
+        summary = summaries.get(tid, "")
+        summary_cell = f'<br><span class="summary">{esc(summary)}</span>' if summary else ""
         rows_em.append(
             f"<tr>"
-            f"<td>{name_cell}{lc}</td>"
+            f"<td>{name_cell}{lc}{summary_cell}</td>"
             f"<td>{_format_score(r['attention_index'])}</td>"
             f"<td>{_format_score(r['momentum'])}</td>"
             f"<td>{_format_score(r['anomaly_z'])}</td>"
@@ -163,6 +171,7 @@ a:hover{{text-decoration:underline}}
 .spark{{vertical-align:middle;display:inline-block}}
 .notice{{color:#8b949e;font-size:12px;margin-top:8px;font-style:italic}}
 sup{{font-size:10px;color:#8b949e}}
+.summary{{font-size:12px;color:#8b949e;font-style:italic}}
 footer{{padding:16px 24px;border-top:1px solid #30363d;color:#8b949e;font-size:11px;margin-top:40px}}
 </style>
 </head>
