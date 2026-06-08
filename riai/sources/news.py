@@ -100,7 +100,7 @@ def fetch_gdelt_mentions(cfg: dict[str, Any]) -> list[dict[str, Any]]:
             return []
         data = resp.json()
     except (requests.RequestException, ValueError) as exc:
-        log.warning("GDELT DOC API fetch failed: %s", exc)
+        log.debug("GDELT DOC API fetch failed: %s", exc)
         return []
 
     articles = data.get("articles") or []
