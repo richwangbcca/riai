@@ -1,11 +1,12 @@
-anthropic>=0.40
 requests>=2.31
 sseclient-py>=1.8
 feedparser>=6.0
 pyyaml>=6.0
+python-dotenv>=1.0
 spacy>=3.7
 rapidfuzz>=3.6
 yake>=0.4.8
+pytest>=8.0                 # dev: run the suite with `python3 -m pytest tests/`
 # duckdb>=0.10              # optional: swap in if SQLite analytical queries get slow
 # sentence-transformers>=2.6  # optional: embedding-based match fallback; requires torch
 #   install separately if needed: pip install sentence-transformers

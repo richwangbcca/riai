@@ -3,7 +3,7 @@ Batched LLM summarization: generates one-line "why is this trending?" blurbs
 for the top N topics, using recent article headlines as context.
 
 One API call per refresh cycle. Never per-event.
-Requires ANTHROPIC_API_KEY in the environment.
+Requires GEMINI_API_KEY in the environment.
 """
 from __future__ import annotations
 
@@ -13,7 +13,13 @@ import os
 import sqlite3
 from typing import Any
 
+import requests
+
+import storage
+
 log = logging.getLogger(__name__)
+
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 _INSTRUCTIONS = """\
 You are helping users of a news attention tracker understand why topics are trending.
@@ -24,57 +30,44 @@ is getting attention right now. Be specific — name the event, person, or devel
 driving the attention. If the headlines are too vague to be specific, write a \
 brief general description.
 
-Respond with a JSON array of strings, one per topic, in the same order as the input. \
-No keys, no extra text — only the JSON array.\
+Respond with a JSON array of strings, one per topic, in the same order as the input.\
 """
 
 
 def _fetch_topic_headlines(conn: sqlite3.Connection, topic_id: str, n: int = 5) -> list[str]:
     rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT title FROM events
         WHERE topic_id = ? AND title IS NOT NULL
-          AND ts >= datetime('now', '-24 hours')
+          AND ts >= {storage.cutoff_sql('hours')}
         ORDER BY ts DESC
         LIMIT ?
         """,
-        (topic_id, n),
+        (topic_id, "-24", n),
     ).fetchall()
     return [r["title"] for r in rows if r["title"]]
 
 
 def _build_topic_block(name: str, headlines: list[str]) -> str:
-    lines = [f"Topic: {name}"]
-    if headlines:
-        lines.append("Recent headlines:")
-        for h in headlines:
-            lines.append(f"  - {h}")
-    else:
-        lines.append("(no recent headlines available)")
+    lines = [f"Topic: {name}", "Recent headlines:"]
+    lines.extend(f"  - {h}" for h in headlines)
     return "\n".join(lines)
 
 
-def generate_summaries(
-    conn: sqlite3.Connection,
-    cfg: dict[str, Any],
-    top_n: int = 20,
-) -> int:
+def generate_summaries(conn: sqlite3.Connection, cfg: dict[str, Any]) -> int:
     """
-    Generate summaries for the top `top_n` topics by attention index.
+    Generate summaries for the top `summarize.top_n` topics by attention index.
+    Topics with no recent headlines are skipped (no context = hallucinated blurb).
     Stores results in topic_summaries. Returns number of topics updated.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        log.warning("ANTHROPIC_API_KEY not set; skipping summarization")
+        log.warning("GEMINI_API_KEY not set; skipping summarization")
         return 0
 
-    try:
-        import anthropic
-    except ImportError:
-        log.warning("anthropic package not installed; skipping summarization")
-        return 0
-
-    model = cfg.get("summarize", {}).get("model", "claude-haiku-4-5-20251001")
+    summarize_cfg = cfg.get("summarize", {})
+    model = summarize_cfg.get("model", "gemini-2.5-flash")
+    top_n = summarize_cfg.get("top_n", 20)
 
     # Fetch top topics from latest scoring run
     rows = conn.execute(
@@ -90,55 +83,46 @@ def generate_summaries(
         (top_n,),
     ).fetchall()
 
-    if not rows:
+    topics: list[tuple[str, str]] = []
+    topic_blocks: list[str] = []
+    for r in rows:
+        headlines = _fetch_topic_headlines(conn, r["topic_id"])
+        if not headlines:
+            continue
+        topics.append((r["topic_id"], r["canonical_name"]))
+        topic_blocks.append(_build_topic_block(r["canonical_name"], headlines))
+
+    if not topics:
+        log.info("No topics with recent headlines; skipping summarization")
         return 0
 
-    topics = [(r["topic_id"], r["canonical_name"]) for r in rows]
-    topic_blocks = []
-    for tid, name in topics:
-        headlines = _fetch_topic_headlines(conn, tid)
-        topic_blocks.append(_build_topic_block(name, headlines))
-
     dynamic_content = "\n\n".join(topic_blocks)
+    prompt = f"{_INSTRUCTIONS}\n\n{dynamic_content}"
 
-    client = anthropic.Anthropic(api_key=api_key)
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=800,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        # Static instructions — cached after first call
-                        {
-                            "type": "text",
-                            "text": _INSTRUCTIONS,
-                            "cache_control": {"type": "ephemeral"},
-                        },
-                        # Dynamic topic content — changes each call
-                        {
-                            "type": "text",
-                            "text": dynamic_content,
-                        },
-                    ],
-                }
-            ],
+        response = requests.post(
+            _GEMINI_URL.format(model=model),
+            params={"key": api_key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "responseSchema": {"type": "ARRAY", "items": {"type": "STRING"}},
+                },
+            },
+            timeout=30,
         )
-    except Exception as exc:
+        response.raise_for_status()
+    except requests.RequestException as exc:
         log.warning("LLM summarization API call failed: %s", exc)
         return 0
 
-    raw = response.content[0].text.strip()
     try:
-        # Strip markdown code fences if the model wrapped the JSON
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+        data = response.json()
+        raw = data["candidates"][0]["content"]["parts"][0]["text"]
         summaries: list[str] = json.loads(raw)
-    except (json.JSONDecodeError, IndexError) as exc:
-        log.warning("Failed to parse LLM summary response: %s\nRaw: %.200s", exc, raw)
+    except (KeyError, IndexError, ValueError, json.JSONDecodeError) as exc:
+        log.warning("Failed to parse LLM summary response: %s\nRaw: %.200s", exc, response.text)
         return 0
 
     if len(summaries) != len(topics):
@@ -147,7 +131,7 @@ def generate_summaries(
         )
         return 0
 
-    now = __import__("storage").now_utc()
+    now = storage.now_utc()
     for (tid, _name), summary in zip(topics, summaries):
         summary = summary.strip()
         if not summary:

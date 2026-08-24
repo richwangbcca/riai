@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import load_dotenv
 
 import storage
 import score as scoring
@@ -443,6 +444,7 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
 
 
 def main() -> None:
+    load_dotenv()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-8s %(name)s %(message)s",

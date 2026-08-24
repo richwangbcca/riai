@@ -154,10 +154,10 @@ def _compute_anomaly_z(
     Uses scores table (not signals) for the composite-level anomaly.
     """
     rows = conn.execute(
-        """
+        f"""
         SELECT attention_index FROM scores
         WHERE topic_id = ?
-          AND ts >= datetime('now', ? || ' days')
+          AND ts >= {storage.cutoff_sql('days')}
           AND CAST(strftime('%H', ts) AS INTEGER) = ?
         ORDER BY ts DESC
         """,

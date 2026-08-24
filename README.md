@@ -142,12 +142,12 @@ requirements.txt
 
 ## TODOs
 
-- **Fix Emerging Topics table** — the table is oftentimes empty even after the poller has been running for several hours. When it is filled, there is no limit to the number of topics in the table.
+- **Breaking news cold-start** — new topics (earthquakes, sudden events) score too low for the first several hours because they have no z-score baseline. A magnitude 7.8 earthquake ranked 43rd five hours after it happened. Needs a percentile-rank fallback for cold-start topics and a rolling N-hour signal window instead of just the current hour bucket.
 
-- **LLM summaries for trending topics** — add a batched enrichment step that calls a free-tier LLM (e.g. Claude Haiku via the Anthropic API, or a local model) once per refresh cycle to generate a one-line "why is this trending?" blurb for the top ~20 topics. Should pull recent article titles/headlines as context. Never per-event, always batched. Display inline in the dashboard.
+- **Improve Emerging Topics** — shows up but rarely. The `anomaly_z` requires 6+ same-hour historical samples, which means a topic needs to have been active at the same hour on previous days. Consider falling back to all-hours history when same-hour samples are sparse.
 
 - **Validation harness** — pick 10–20 known past events with timestamps, backfill via Pageviews and GDELT history, and measure whether RIAI would have surfaced each one in the top movers. Currently untested end-to-end.
 
 - **Deduplicate near-duplicate topics** — "2026 FIFA World Cup" and "FIFA World Cup 2026" can end up as separate topics if they come from different sources before the matcher sees them. An offline periodic merge pass would clean this up.
 
-- **Remove grammatical articles** — Topics such as "The New York Knicks" do not link to the New York Knicks Wikipedia page.
+- **Remove grammatical articles** — topics such as "The New York Knicks" do not match the Wikipedia page for the New York Knicks because of the leading "The".

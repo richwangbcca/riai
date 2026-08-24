@@ -43,6 +43,23 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def cutoff_sql(unit: str) -> str:
+    """SQL expression for a time cutoff, in the format ts columns actually store.
+
+    Every ts/bucket_ts column holds now_utc()'s format. SQLite's datetime() emits
+    "YYYY-MM-DD HH:MM:SS" instead, and string-comparing the two diverges at the
+    'T' vs ' ' separator — so any row sharing the cutoff's date passes regardless
+    of its time, silently widening every window by up to a day. Use this instead
+    of datetime('now', ...) in any query that compares against a ts column.
+
+    `unit` is a SQLite date-modifier unit ("days", "hours"); the signed amount is
+    bound as a parameter, so the query takes one placeholder here:
+
+        conn.execute(f"... WHERE ts >= {cutoff_sql('hours')}", (f"-{hours}",))
+    """
+    return f"strftime('%Y-%m-%dT%H:%M:%SZ','now',? || ' {unit}')"
+
+
 def hour_bucket(ts: str | None = None) -> str:
     """Return the current (or given) UTC hour as a bucket string."""
     if ts is None:
@@ -192,15 +209,8 @@ def get_unmatched_events(
 
 
 def purge_old_events(conn: sqlite3.Connection, retain_days: int = 30) -> int:
-    cutoff = datetime.now(timezone.utc)
-    cutoff_str = cutoff.strftime(f"%Y-%m-%dT%H:%M:%SZ").replace(
-        cutoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        f"{cutoff.year - (1 if cutoff.timetuple().tm_yday <= retain_days else 0)}"
-        f"-{cutoff.strftime('%m-%dT%H:%M:%SZ')}",
-    )
-    # simpler: use SQLite date arithmetic
     cur = conn.execute(
-        "DELETE FROM events WHERE ts < datetime('now', ? || ' days')",
+        f"DELETE FROM events WHERE ts < {cutoff_sql('days')}",
         (f"-{retain_days}",),
     )
     return cur.rowcount
@@ -237,10 +247,10 @@ def get_signal_history(
     days: int = 7,
 ) -> list[sqlite3.Row]:
     return conn.execute(
-        """
+        f"""
         SELECT bucket_ts, value FROM signals
         WHERE topic_id = ? AND source = ? AND signal = ?
-          AND bucket_ts >= datetime('now', ? || ' days')
+          AND bucket_ts >= {cutoff_sql('days')}
         ORDER BY bucket_ts
         """,
         (topic_id, source, signal, f"-{days}"),
@@ -260,20 +270,20 @@ def get_signal_baseline(
     """
     if current_hour_of_day is not None:
         rows = conn.execute(
-            """
+            f"""
             SELECT value FROM signals
             WHERE topic_id = ? AND source = ? AND signal = ?
-              AND bucket_ts >= datetime('now', ? || ' days')
+              AND bucket_ts >= {cutoff_sql('days')}
               AND CAST(strftime('%H', bucket_ts) AS INTEGER) = ?
             """,
             (topic_id, source, signal, f"-{days}", current_hour_of_day),
         ).fetchall()
     else:
         rows = conn.execute(
-            """
+            f"""
             SELECT value FROM signals
             WHERE topic_id = ? AND source = ? AND signal = ?
-              AND bucket_ts >= datetime('now', ? || ' days')
+              AND bucket_ts >= {cutoff_sql('days')}
             """,
             (topic_id, source, signal, f"-{days}"),
         ).fetchall()
@@ -331,9 +341,9 @@ def get_score_history(
     conn: sqlite3.Connection, topic_id: str, hours: int = 24
 ) -> list[sqlite3.Row]:
     return conn.execute(
-        """
+        f"""
         SELECT * FROM scores
-        WHERE topic_id = ? AND ts >= datetime('now', ? || ' hours')
+        WHERE topic_id = ? AND ts >= {cutoff_sql('hours')}
         ORDER BY ts
         """,
         (topic_id, f"-{hours}"),

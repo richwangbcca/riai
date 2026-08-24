@@ -98,10 +98,10 @@ dashboard:
   regenerate_minutes: 5     # how often the poller rebuilds the HTML
 
 # ---------------------------------------------------------------------------
-# LLM summarization (requires ANTHROPIC_API_KEY env var)
+# LLM summarization (requires GEMINI_API_KEY env var, see .env.example)
 # ---------------------------------------------------------------------------
 summarize:
-  model: "claude-haiku-4-5-20251001"
+  model: "gemini-2.5-flash"
   top_n: 20
   interval_minutes: 10
 
