@@ -48,6 +48,38 @@ def _load_config(path: str) -> dict[str, Any]:
     return yaml.safe_load(Path(path).read_text())
 
 
+def _maybe_reload_config(
+    path: str, current: dict[str, Any], last_mtime: float
+) -> tuple[dict[str, Any], float]:
+    """Re-read config.yaml when it changes, so edits apply without a restart.
+
+    A half-written or malformed file keeps the last good config rather than
+    crashing the poller. The new mtime is recorded either way, so a broken file
+    is reported once instead of every loop iteration.
+    """
+    try:
+        mtime = Path(path).stat().st_mtime
+    except OSError as exc:
+        log.warning("Could not stat %s: %s", path, exc)
+        return current, last_mtime
+
+    if mtime == last_mtime:
+        return current, last_mtime
+
+    try:
+        cfg = _load_config(path)
+    except Exception as exc:
+        log.warning("Config reload failed, keeping previous config: %s", exc)
+        return current, mtime
+
+    if not isinstance(cfg, dict):
+        log.warning("Config reload ignored: %s did not parse to a mapping", path)
+        return current, mtime
+
+    log.info("Reloaded %s", path)
+    return cfg, mtime
+
+
 # ---------------------------------------------------------------------------
 # Ingest helpers
 # ---------------------------------------------------------------------------
@@ -315,21 +347,17 @@ def _poll_reddit(
 
 def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
     cfg = _load_config(config_path)
+    try:
+        cfg_mtime = Path(config_path).stat().st_mtime
+    except OSError:
+        cfg_mtime = 0.0
     db = db_path or cfg.get("db_path", "riai.db")
     conn = storage.open_db(db)
 
+    # ponytail: the stream thread keeps the matching config it was handed at
+    # startup; changing matching.* still needs a restart to reach it. Everything
+    # the main loop drives (weights, thresholds, intervals, summarize) reloads.
     matching_cfg = cfg.get("matching", {})
-    weights = cfg.get("weights", {})
-    scoring_cfg = cfg.get("scoring", {})
-    dashboard_cfg = cfg.get("dashboard", {})
-    retention_cfg = cfg.get("retention", {})
-
-    poll_interval_reddit = cfg.get("reddit", {}).get("poll_minutes", 5) * 60
-    poll_interval_rss = cfg.get("news", {}).get("rss_poll_minutes", 5) * 60
-    poll_interval_gdelt = cfg.get("news", {}).get("gdelt_poll_minutes", 30) * 60
-    poll_interval_pv = cfg.get("wikipedia", {}).get("pageviews_poll_minutes", 60) * 60
-    poll_interval_dashboard = dashboard_cfg.get("regenerate_minutes", 5) * 60
-    poll_interval_summarize = cfg.get("summarize", {}).get("interval_minutes", 10) * 60
 
     last_event_id: list[str | None] = [storage.get_meta(conn, "wp_last_event_id")]
 
@@ -366,6 +394,20 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
 
     while not _SHUTDOWN.is_set():
+        cfg, cfg_mtime = _maybe_reload_config(config_path, cfg, cfg_mtime)
+        matching_cfg = cfg.get("matching", {})
+        weights = cfg.get("weights", {})
+        scoring_cfg = cfg.get("scoring", {})
+        dashboard_cfg = cfg.get("dashboard", {})
+        retention_cfg = cfg.get("retention", {})
+
+        poll_interval_reddit = cfg.get("reddit", {}).get("poll_minutes", 5) * 60
+        poll_interval_rss = cfg.get("news", {}).get("rss_poll_minutes", 5) * 60
+        poll_interval_gdelt = cfg.get("news", {}).get("gdelt_poll_minutes", 30) * 60
+        poll_interval_pv = cfg.get("wikipedia", {}).get("pageviews_poll_minutes", 60) * 60
+        poll_interval_dashboard = dashboard_cfg.get("regenerate_minutes", 5) * 60
+        poll_interval_summarize = cfg.get("summarize", {}).get("interval_minutes", 10) * 60
+
         now = time.monotonic()
 
         if now - last["pageviews"] >= poll_interval_pv:

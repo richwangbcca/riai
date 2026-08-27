@@ -171,7 +171,7 @@ a:hover{{text-decoration:underline}}
 .spark{{vertical-align:middle;display:inline-block}}
 .notice{{color:#8b949e;font-size:12px;margin-top:8px;font-style:italic}}
 sup{{font-size:10px;color:#8b949e}}
-.summary{{font-size:12px;color:#8b949e;font-style:italic}}
+.summary{{font-size:12px;color:#8b949e;font-style:italic;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}}
 footer{{padding:16px 24px;border-top:1px solid #30363d;color:#8b949e;font-size:11px;margin-top:40px}}
 </style>
 </head>

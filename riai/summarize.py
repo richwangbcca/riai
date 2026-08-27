@@ -66,7 +66,7 @@ def generate_summaries(conn: sqlite3.Connection, cfg: dict[str, Any]) -> int:
         return 0
 
     summarize_cfg = cfg.get("summarize", {})
-    model = summarize_cfg.get("model", "gemini-2.5-flash")
+    model = summarize_cfg.get("model", "gemini-3.6-flash")
     top_n = summarize_cfg.get("top_n", 20)
 
     # Fetch top topics from latest scoring run
@@ -102,7 +102,7 @@ def generate_summaries(conn: sqlite3.Connection, cfg: dict[str, Any]) -> int:
     try:
         response = requests.post(
             _GEMINI_URL.format(model=model),
-            params={"key": api_key},
+            headers={"x-goog-api-key": api_key},  # not a query param: URLs land in logs
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {

@@ -1,5 +1,6 @@
 # RIAI configuration — edit weights, thresholds, and source settings here.
-# All weights and thresholds are hot-reloaded each scoring run (no restart needed).
+# Edits are picked up on the next poll loop — no restart needed, except for
+# matching.* which the Wikipedia stream thread reads once at startup.
 
 db_path: riai.db
 
@@ -110,7 +111,7 @@ dashboard:
 # LLM summarization (requires GEMINI_API_KEY env var, see .env.example)
 # ---------------------------------------------------------------------------
 summarize:
-  model: "gemini-2.5-flash"
+  model: "gemini-3.6-flash"
   top_n: 20
   interval_minutes: 10
 

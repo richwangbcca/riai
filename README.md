@@ -95,7 +95,9 @@ sudo journalctl -u poller.service -f
 
 ## Configuration
 
-Everything tunable lives in `riai/config.yaml` — composite weights, z-score threshold, subreddit list, poll intervals, RSS feeds. The poller hot-reloads config on each scoring cycle, no restart needed.
+Everything tunable lives in `riai/config.yaml` — composite weights, z-score threshold, subreddit list, poll intervals, RSS feeds. The poller re-reads the file when its mtime changes, so edits apply without a restart. A malformed edit is logged and the last good config is kept, rather than taking the process down.
+
+Two caveats: the reload happens at the top of each poll loop, so a change lands once the current cycle finishes — usually seconds, but minutes if a source is backing off from rate limits. And `matching.*` is handed to the Wikipedia stream thread at startup, so changing those thresholds still needs a restart.
 
 Key knobs:
 

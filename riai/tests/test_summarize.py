@@ -50,8 +50,10 @@ def _run(monkeypatch, conn, cfg, n_summaries):
     """Run generate_summaries against a stubbed API; returns the prompt sent."""
     sent = {}
 
-    def fake_post(url, params=None, json=None, timeout=None):
+    def fake_post(url, json=None, **kwargs):
         sent["prompt"] = json["contents"][0]["parts"][0]["text"]
+        sent["headers"] = kwargs.get("headers", {})
+        sent["url"] = url
         return _FakeResponse([f"summary {i}" for i in range(n_summaries)])
 
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
@@ -102,3 +104,25 @@ def test_top_n_comes_from_config(monkeypatch):
 
     assert "Topic 0" in prompt and "Topic 1" in prompt
     assert "Topic 2" not in prompt
+
+
+def test_api_key_is_sent_as_header_not_in_url(monkeypatch):
+    """The key must stay out of the URL — request URLs end up in warning logs."""
+    conn = _fresh_db()
+    _seed(conn, "has-news", "Has News", 0.9, ["Something happened"])
+
+    sent = {}
+
+    def fake_post(url, json=None, **kwargs):
+        sent["url"] = url
+        sent["headers"] = kwargs.get("headers", {})
+        sent["params"] = kwargs.get("params")
+        return _FakeResponse(["a summary"])
+
+    monkeypatch.setenv("GEMINI_API_KEY", "secret-key-value")
+    monkeypatch.setattr(summarize.requests, "post", fake_post)
+    summarize.generate_summaries(conn, {})
+
+    assert sent["headers"].get("x-goog-api-key") == "secret-key-value"
+    assert "secret-key-value" not in sent["url"]
+    assert not (sent["params"] or {})
