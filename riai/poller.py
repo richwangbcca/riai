@@ -428,12 +428,11 @@ def run(config_path: str = "config.yaml", db_path: str | None = None) -> None:
                 log.error("Dashboard build error: %s", exc)
             last["dashboard"] = now
 
-        # Daily purge
-        if now - last["purge"] >= 86400:
+        # Hourly purge. Daily was too slow: a day of ingest at this cadence
+        # writes more than one pass could ever delete, so the DB only grew.
+        if now - last["purge"] >= 3600:
             try:
-                n = storage.purge_old_events(conn, retain_days=retention_cfg.get("raw_events_days", 30))
-                log.info("Purged %d old events", n)
-                conn.commit()
+                log.info("Purged %s", storage.purge(conn, retention_cfg))
             except Exception as exc:
                 log.error("Purge error: %s", exc)
             last["purge"] = now

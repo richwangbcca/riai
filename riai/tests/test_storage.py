@@ -142,6 +142,30 @@ def test_purge_respects_the_day_boundary():
         )
     conn.commit()
 
-    assert storage.purge_old_events(conn, retain_days=7) == 2
+    assert storage.purge(conn, {"raw_events_days": 7})["events"] == 2
     kept = {r["external_id"] for r in conn.execute("SELECT external_id FROM events")}
     assert kept == {"e1", "e3"}
+
+
+def test_purge_cascades_idle_topics():
+    """An idle topic must take its scores/signals/aliases with it -- that cascade
+    is where the bulk of the reclaimed space comes from."""
+    from datetime import datetime, timedelta, timezone
+
+    conn = _fresh()
+    now = datetime.now(timezone.utc)
+    iso = lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    for tid, age in (("stale", 10), ("fresh", 0)):
+        storage.upsert_topic(conn, tid, tid)
+        conn.execute("UPDATE topics SET last_seen=? WHERE topic_id=?", (iso(now - timedelta(days=age)), tid))
+        storage.add_alias(conn, tid, f"{tid}-alias")
+        storage.upsert_signal(conn, tid, storage.hour_bucket(), "news", "article_count", 1.0)
+        storage.insert_score(conn, tid, iso(now))
+    conn.commit()
+
+    deleted = storage.purge(conn, {"topic_idle_days": 3})
+    assert deleted["topics"] == 1
+    for table in ("topics", "scores", "signals", "topic_aliases"):
+        rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+        assert [r["topic_id"] for r in rows] == ["fresh"], (table, rows)

@@ -83,9 +83,18 @@ reddit:
 # ---------------------------------------------------------------------------
 # Data retention
 # ---------------------------------------------------------------------------
+# Purge runs hourly. Every value here is a hard cap on a table that would
+# otherwise grow forever; raising any of them grows the DB proportionally.
 retention:
-  raw_events_days: 7       # purge raw events older than this
-  signals_days: 90          # keep hourly signal buckets 90 days
+  topic_idle_days: 3        # drop topics not seen in this long -- CASCADEs away
+                            # their signals/scores/aliases/summaries. Most topics
+                            # are one-off Wikipedia edits; this is the big lever.
+  raw_events_days: 3        # raw events, only used for the low_confidence gate
+  scores_days: 2            # one row per active topic per 5min run -- the fastest
+                            # growing table. 2 days still leaves anomaly_z ~24
+                            # same-hour samples (it needs 6) and covers the 24h
+                            # sparklines. Anything longer is why this hit 8 GB.
+  signals_days: 30          # hourly buckets; the 7d baseline only reads the tail
 
 # ---------------------------------------------------------------------------
 # Dashboard

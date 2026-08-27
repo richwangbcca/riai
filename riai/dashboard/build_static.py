@@ -189,7 +189,7 @@ footer{{padding:16px 24px;border-top:1px solid #30363d;color:#8b949e;font-size:1
 
   <section style="margin-top:24px">
     <h2>Emerging Topics</h2>
-    <p class="notice">Topics rising &gt;{{}}&sigma; above their own baseline right now.</p>
+    <p class="notice">Topics rising sharply above their own baseline right now.</p>
     <table>
       <thead><tr>
         <th>Topic</th><th>Attention</th><th>Momentum</th><th>Anomaly Z</th><th>24h</th>

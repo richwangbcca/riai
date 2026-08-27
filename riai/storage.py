@@ -208,12 +208,37 @@ def get_unmatched_events(
     ).fetchall()
 
 
-def purge_old_events(conn: sqlite3.Connection, retain_days: int = 30) -> int:
-    cur = conn.execute(
-        f"DELETE FROM events WHERE ts < {cutoff_sql('days')}",
-        (f"-{retain_days}",),
-    )
-    return cur.rowcount
+# (table, timestamp column, retention config key, default days)
+# Idle topics come FIRST: schema.sql declares ON DELETE CASCADE from signals,
+# scores, topic_aliases and topic_summaries back to topics, so dropping a topic
+# takes its whole history with it in one statement. Most topics are one-hit
+# Wikipedia edits that are never seen again, so this is where the bulk goes;
+# the per-table sweeps below only trim the survivors.
+_RETENTION = (
+    ("topics",  "last_seen", "topic_idle_days",  3),
+    ("events",  "ts",        "raw_events_days",  3),
+    ("scores",  "ts",        "scores_days",      2),
+    ("signals", "bucket_ts", "signals_days",    30),
+)
+
+
+def purge(conn: sqlite3.Connection, retention: dict[str, Any] | None = None) -> dict[str, int]:
+    """Enforce retention on every unbounded table. Returns rows deleted per table.
+
+    Deleted pages go on SQLite's freelist and are reused by later inserts, so
+    the file plateaus rather than shrinking. Run VACUUM once by hand to hand
+    space back to the OS after a backlog like this.
+    """
+    retention = retention or {}
+    deleted: dict[str, int] = {}
+    for table, col, key, default in _RETENTION:
+        cur = conn.execute(
+            f"DELETE FROM {table} WHERE {col} < {cutoff_sql('days')}",
+            (f"-{retention.get(key, default)}",),
+        )
+        deleted[table] = cur.rowcount
+    conn.commit()
+    return deleted
 
 
 # ---------------------------------------------------------------------------
