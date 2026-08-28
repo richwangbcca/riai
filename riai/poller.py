@@ -321,7 +321,7 @@ def _poll_reddit(
     bucket = storage.hour_bucket()
 
     log.info("Polling Reddit...")
-    posts = reddit_source.poll_all_subreddits(reddit_cfg)
+    posts = reddit_source.poll_next_subreddit(reddit_cfg)
     for post in posts:
         if not post["title"]:
             continue

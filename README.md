@@ -123,7 +123,7 @@ Summarization is deliberately one batched request per cycle, never one per topic
 | Wikipedia Pageviews API | Hourly reader counts per article | Every 60 min |
 | RSS feeds (8 outlets) | Article titles and publication times | Every 5 min |
 | GDELT DOC API | Global news article stream | Every 30 min |
-| Reddit (10 subreddits) | Hot post titles via RSS | Every 5 min |
+| Reddit (10 subreddits) | Hot post titles via RSS | One subreddit every 5 min, round-robin |
 
 No API keys required for any of these. The optional Gemini summaries are the one exception, and they consume the sources above rather than adding a new one.
 

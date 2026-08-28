@@ -6,7 +6,6 @@ feedparser already handles RSS parsing, so no new dependency needed.
 from __future__ import annotations
 
 import logging
-import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,8 +30,10 @@ def fetch_subreddit_rss(
     try:
         parsed = feedparser.parse(url, request_headers={"User-Agent": ua})
         if parsed.get("status", 200) == 429:
-            log.warning("Reddit rate-limited on r/%s, backing off", subreddit)
-            time.sleep(60)
+            # Never sleep here: this runs on the main poll loop, and blocking it
+            # delays scoring, the dashboard rebuild and the config reload too.
+            # The caller's own interval is the backoff.
+            log.debug("Reddit rate-limited on r/%s, skipping this cycle", subreddit)
             return []
         posts = []
         for entry in parsed.entries:
@@ -70,12 +71,26 @@ def _rss_ts(entry: Any) -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def poll_all_subreddits(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+_next_sub = 0
+
+
+def poll_next_subreddit(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fetch one subreddit per call, cycling through the configured list.
+
+    Reddit throttles this IP to roughly one RSS fetch per minute no matter how
+    the requests are spaced -- measured 1 success in 6 at both 3s and 10s
+    spacing. Fetching every subreddit each cycle therefore 429'd on all but one
+    while the caller slept 60s per failure, stalling the whole poll loop for
+    ~9 minutes to collect a single subreddit's worth of posts.
+
+    One request per cycle stays under the throttle and never blocks. At the
+    default 5-minute interval each subreddit comes round about every 50
+    minutes; trim `reddit.subreddits` to tighten that.
+    """
+    global _next_sub
     subreddits = cfg.get("subreddits", [])
-    limit = cfg.get("posts_per_sub", 25)
-    results: list[dict[str, Any]] = []
-    for sub in subreddits:
-        posts = fetch_subreddit_rss(sub, cfg, limit=limit)
-        results.extend(posts)
-        time.sleep(1)  # stay polite
-    return results
+    if not subreddits:
+        return []
+    sub = subreddits[_next_sub % len(subreddits)]
+    _next_sub += 1
+    return fetch_subreddit_rss(sub, cfg, limit=cfg.get("posts_per_sub", 25))
