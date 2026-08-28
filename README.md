@@ -106,6 +106,8 @@ Key knobs:
 | `scoring.zscore_threshold` | 2.5 | σ above baseline to flag emerging |
 | `scoring.baseline_days` | 7 | rolling window for z-score baseline |
 | `weights.*` | see config | Wikipedia/news/Reddit/search composite weights |
+| `scoring.signal_weights` | see config | relative weight of each signal within a source (reads ≫ edits) |
+| `scoring.signal_ceilings` | `wikipedia.edit_count: 0.15` | hard cap on a signal's contribution |
 | `reddit.subreddits` | see config | which subreddits to poll |
 | `news.rss_feeds` | see config | RSS feed list |
 | `summarize.top_n` | 20 | topics summarized per cycle (one batched LLM call) |

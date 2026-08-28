@@ -117,3 +117,72 @@ def test_baseline_without_variance_falls_back_to_the_field():
     small, mid, big = norm("small", 1.0), norm("mid", 5.0), norm("big", 99.0)
     assert small < mid < big, "no-baseline topics must be ordered, not tied"
     assert big <= score._FALLBACK_CEILING, "must not outrank a confirmed anomaly"
+
+
+def _seed_signals(conn, rows, bucket):
+    import storage
+    for tid, source, signal, value in rows:
+        storage.upsert_topic(conn, tid, tid)
+        storage.upsert_signal(conn, tid, bucket, source, signal, value)
+    conn.commit()
+
+
+def _fresh():
+    import sqlite3
+    import storage
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    storage._apply_schema(conn)
+    return conn, storage.hour_bucket()
+
+
+def test_edit_count_ceiling_caps_its_contribution():
+    """edit_count runs 1-13 live, so percentile rank hands nine extra edits a
+    top-0.1% score. Uncapped, a tidied railway station outscored a death with
+    186,777 reads."""
+    conn, bucket = _fresh()
+    _seed_signals(conn, [(f"t{i}", "wikipedia", "edit_count", float(i)) for i in range(1, 20)], bucket)
+
+    dists = score._load_bucket_distributions(conn, bucket)
+    cfg = {"baseline_days": 7, "logistic_k": 1.0, "logistic_midpoint": 2.0}
+    top = score._compute_source_score(conn, "t19", bucket, "wikipedia", cfg, dists)
+
+    assert top == 0.15, "most-edited topic in the field must still be capped"
+
+
+def test_reads_outweigh_edits():
+    """Two mirror-image topics: one widely read and barely edited, one heavily
+    edited and barely read. Under a flat mean these tie."""
+    conn, bucket = _fresh()
+    rows = []
+    for i in range(1, 20):
+        rows.append((f"e{i}", "wikipedia", "edit_count", float(i)))
+        rows.append((f"p{i}", "wikipedia", "pageviews", float(i * 1000)))
+    rows += [("reader", "wikipedia", "pageviews", 19000.0),
+             ("reader", "wikipedia", "edit_count", 1.0),
+             ("editor", "wikipedia", "pageviews", 1000.0),
+             ("editor", "wikipedia", "edit_count", 19.0)]
+    _seed_signals(conn, rows, bucket)
+
+    dists = score._load_bucket_distributions(conn, bucket)
+    # ceilings cleared so this isolates the weighting from the cap
+    cfg = {"baseline_days": 7, "logistic_k": 1.0, "logistic_midpoint": 2.0,
+           "signal_ceilings": {}}
+    src = lambda tid: score._compute_source_score(conn, tid, bucket, "wikipedia", cfg, dists)
+
+    assert src("reader") > src("editor")
+
+
+def test_weights_renormalize_over_signals_actually_present():
+    """Pageviews come from a most-read list, so most topics have none. A topic
+    reporting only edits must not be scored as if reads were zero."""
+    conn, bucket = _fresh()
+    _seed_signals(conn, [("only_edits", "wikipedia", "edit_count", 5.0)], bucket)
+
+    dists = score._load_bucket_distributions(conn, bucket)
+    cfg = {"baseline_days": 7, "logistic_k": 1.0, "logistic_midpoint": 2.0,
+           "signal_ceilings": {}}
+    s = score._compute_source_score(conn, "only_edits", bucket, "wikipedia", cfg, dists)
+
+    # full weight on the one signal present (0.5), not 0.2 * 0.5 = 0.1
+    assert s == 0.25

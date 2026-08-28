@@ -113,67 +113,63 @@ def _zscore_normalize(
     return _logistic(z, k, midpoint)
 
 
-def _compute_wikipedia_score(
+# Signals within a source are not equally informative. Reads are the thing this
+# index claims to measure -- hundreds of thousands of people opening an article
+# -- while an edit count is a handful of people's work on it.
+_DEFAULT_SIGNAL_WEIGHTS: dict[str, dict[str, float]] = {
+    "wikipedia": {"pageviews": 0.8, "edit_count": 0.2},
+    "news": {"article_count": 0.5, "publisher_count": 0.5},
+    "reddit": {"post_velocity": 0.5, "comment_velocity": 0.3, "score_growth": 0.2},
+}
+
+# A ceiling caps what a signal may contribute no matter how it normalizes, for
+# signals whose spread is an artefact rather than information. Live edit_count
+# runs 1 to 13 with a mean of 1.4, so ranking against the field turns nine extra
+# edits into a 99.9th-percentile score: a railway station being tidied outscored
+# a death with 186,777 reads. Edits still move a topic and still arrive in real
+# time, they just cannot carry one to the top alone.
+_DEFAULT_SIGNAL_CEILINGS: dict[str, float] = {"wikipedia.edit_count": 0.15}
+
+
+def _compute_source_score(
     conn: sqlite3.Connection,
     topic_id: str,
     bucket: str,
+    source: str,
     cfg: dict[str, Any],
     dists: Distributions,
 ) -> float:
-    """Normalize edit_count and pageviews signals, average them."""
-    scores: list[float] = []
+    """Weighted mean of a source's normalized signals for this topic.
 
-    for signal in ("edit_count", "pageviews", "unique_editors"):
-        rows = conn.execute(
-            "SELECT value FROM signals WHERE topic_id=? AND source='wikipedia' "
+    Weights are renormalized over the signals actually present, so a topic is
+    not punished for a source that reports nothing this hour. Pageviews come
+    from Wikipedia's most-read list rather than a per-topic lookup, so most
+    topics genuinely have no reads to report.
+    """
+    # Weights merge per source, so overriding one source keeps the others'
+    # defaults. Ceilings replace wholesale, so an empty map in config means
+    # "no ceilings" rather than silently keeping the built-in ones.
+    weights = {**_DEFAULT_SIGNAL_WEIGHTS, **cfg.get("signal_weights", {})}.get(source, {})
+    ceilings = cfg.get("signal_ceilings", _DEFAULT_SIGNAL_CEILINGS)
+
+    weighted = 0.0
+    total_weight = 0.0
+    for signal, weight in weights.items():
+        row = conn.execute(
+            "SELECT value FROM signals WHERE topic_id=? AND source=? "
             "AND signal=? AND bucket_ts=?",
-            (topic_id, signal, bucket),
+            (topic_id, source, signal, bucket),
         ).fetchone()
-        if rows:
-            s = _zscore_normalize(conn, topic_id, "wikipedia", signal, rows["value"], cfg, dists)
-            scores.append(s)
+        if not row:
+            continue
+        s = _zscore_normalize(conn, topic_id, source, signal, row["value"], cfg, dists)
+        ceiling = ceilings.get(f"{source}.{signal}")
+        if ceiling is not None:
+            s = min(s, ceiling)
+        weighted += weight * s
+        total_weight += weight
 
-    return sum(scores) / len(scores) if scores else 0.0
-
-
-def _compute_news_score(
-    conn: sqlite3.Connection,
-    topic_id: str,
-    bucket: str,
-    cfg: dict[str, Any],
-    dists: Distributions,
-) -> float:
-    scores: list[float] = []
-    for signal in ("article_count", "publisher_count"):
-        rows = conn.execute(
-            "SELECT value FROM signals WHERE topic_id=? AND source='news' "
-            "AND signal=? AND bucket_ts=?",
-            (topic_id, signal, bucket),
-        ).fetchone()
-        if rows:
-            s = _zscore_normalize(conn, topic_id, "news", signal, rows["value"], cfg, dists)
-            scores.append(s)
-    return sum(scores) / len(scores) if scores else 0.0
-
-
-def _compute_reddit_score(
-    conn: sqlite3.Connection,
-    topic_id: str,
-    bucket: str,
-    cfg: dict[str, Any],
-    dists: Distributions,
-) -> float:
-    scores: list[float] = []
-    for signal in ("post_velocity", "comment_velocity", "score_growth"):
-        rows = conn.execute(
-            "SELECT value FROM signals WHERE topic_id=? AND source='reddit' "
-            "AND signal=? AND bucket_ts=?",
-            (topic_id, signal, bucket),
-        ).fetchone()
-        if rows:
-            s = _zscore_normalize(conn, topic_id, "reddit", signal, rows["value"], cfg, dists)
-            scores.append(s)
-    return sum(scores) / len(scores) if scores else 0.0
+    return weighted / total_weight if total_weight else 0.0
 
 
 def _update_ewma(
@@ -254,9 +250,9 @@ def run_scoring(
     for row in topic_rows:
         tid = row["topic_id"]
         try:
-            wp = _compute_wikipedia_score(conn, tid, bucket, scoring_cfg, dists)
-            nw = _compute_news_score(conn, tid, bucket, scoring_cfg, dists)
-            rd = _compute_reddit_score(conn, tid, bucket, scoring_cfg, dists)
+            wp = _compute_source_score(conn, tid, bucket, "wikipedia", scoring_cfg, dists)
+            nw = _compute_source_score(conn, tid, bucket, "news", scoring_cfg, dists)
+            rd = _compute_source_score(conn, tid, bucket, "reddit", scoring_cfg, dists)
             sr = 0.0  # search: disabled / delayed
 
             attention = (

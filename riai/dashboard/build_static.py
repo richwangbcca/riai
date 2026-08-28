@@ -238,6 +238,11 @@ footer{{padding:16px 24px;border-top:1px solid #30363d;color:#8b949e;font-size:1
       scores top out near 0.95. A topic seen in only a handful of events is marked ~.
     </p>
     <p class="cav">
+      Within Wikipedia, reads count for far more than edits. Reads are hundreds of thousands of
+      people opening an article; an edit count is a handful of people working on it, and it is
+      capped so that editing activity alone cannot carry a topic to the top of this page.
+    </p>
+    <p class="cav">
       Some topics have no usable history to compare against — brand new, or so steady that they have
       no normal variation. Those are ranked against everything else active at that moment instead,
       and capped at half the range, so a topic we cannot call unusual never outranks one we can.

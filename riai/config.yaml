@@ -24,6 +24,28 @@ scoring:
   logistic_midpoint: 2.0    # z-score midpoint of the squash (center)
   min_events_for_confidence: 10   # events before low_confidence is cleared
 
+  # Relative weight of each signal within its source. Reads are what this index
+  # claims to measure; edits are a handful of people's work on an article.
+  # Renormalized over whichever signals a topic actually reports this hour.
+  signal_weights:
+    wikipedia:
+      pageviews:        0.8
+      edit_count:       0.2
+    news:
+      article_count:    0.5
+      publisher_count:  0.5
+    reddit:
+      post_velocity:    0.5
+      comment_velocity: 0.3
+      score_growth:     0.2
+
+  # Hard cap on a signal's contribution, for signals whose spread is an artefact.
+  # edit_count runs 1-13 live, so percentile-ranking it turns nine extra edits
+  # into a top-0.1% score. Capped, edits still move a topic but cannot carry one
+  # to the top of the page on their own.
+  signal_ceilings:
+    wikipedia.edit_count: 0.15
+
 # ---------------------------------------------------------------------------
 # Wikipedia EventStreams
 # ---------------------------------------------------------------------------
