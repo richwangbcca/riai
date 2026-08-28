@@ -172,6 +172,11 @@ a:hover{{text-decoration:underline}}
 .notice{{color:#8b949e;font-size:12px;margin-top:8px;font-style:italic}}
 sup{{font-size:10px;color:#8b949e}}
 .summary{{font-size:12px;color:#8b949e;font-style:italic;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}}
+.explainer{{font-size:13px;color:#8b949e;line-height:1.65;max-width:760px}}
+.explainer h3{{font-size:13px;color:#c9d1d9;font-weight:600;margin:18px 0 4px}}
+.explainer h3:first-of-type{{margin-top:0}}
+.explainer p{{margin-bottom:6px}}
+.explainer .cav{{color:#6e7681}}
 footer{{padding:16px 24px;border-top:1px solid #30363d;color:#8b949e;font-size:11px;margin-top:40px}}
 </style>
 </head>
@@ -210,6 +215,63 @@ footer{{padding:16px 24px;border-top:1px solid #30363d;color:#8b949e;font-size:1
         {top_html}
       </tbody>
     </table>
+  </section>
+
+  <section class="explainer">
+    <h2>How to read this page</h2>
+
+    <h3>Attention</h3>
+    <p>
+      A 0–1 score for how <em>unusual</em> a topic's activity is right now — not how big it is.
+      Each hour, a topic's edit counts, article counts and post counts are compared against what
+      that same topic normally does at that same hour of day over the past week. Matching its own
+      normal scores near zero; running about two standard deviations above it scores around 0.5,
+      and further above that climbs toward 1.
+    </p>
+    <p>
+      So a small topic doing ten times its usual traffic will outrank a famous one having an
+      ordinary day. A high score means "unusually busy for itself", never "most popular".
+    </p>
+    <p class="cav">
+      The four sources are weighted Wikipedia 40%, news 35%, Reddit 20%, search 5% (defaults; set in
+      <code>config.yaml</code>). Search is not implemented and contributes nothing, so in practice
+      scores top out near 0.95. A topic with no baseline to compare against yet gets a fixed low
+      placeholder for that signal rather than a real score, and a topic seen in only a handful of
+      events is separately marked ~.
+    </p>
+
+    <h3>Momentum</h3>
+    <p>
+      Whether a topic is still climbing or already past its peak. It is the current attention score
+      minus that topic's own recent smoothed average, so it asks "is right now busier than the last
+      few hours were?" rather than comparing against other topics.
+    </p>
+    <p>
+      <span class="badge up">▲</span> rising · <span class="badge dn">▼</span> fading ·
+      <span class="badge flat">—</span> holding steady. A topic can have high attention and negative
+      momentum at the same time: still busy, but quieter than it just was. Brand-new topics sit near
+      zero until they have enough history to be compared against.
+    </p>
+
+    <h3>The {sparkline_hours}h graph</h3>
+    <p>
+      The topic's attention score at every scoring run over the last {sparkline_hours} hours, oldest
+      on the left. It is there to show the <em>shape</em> of a run — one clean spike, a slow build,
+      or a jagged on-and-off pattern.
+    </p>
+    <p class="cav">
+      Each line is scaled to its own highest and lowest point, so heights are not comparable between
+      rows: a dramatic-looking peak in one row may be a far smaller move than a gentle rise in
+      another. A flat line means the score did not change, or there is not yet enough history.
+    </p>
+
+    <h3>Emerging &amp; Anomaly Z</h3>
+    <p>
+      A topic is flagged emerging when its current attention is at least 2.5 standard deviations
+      above its own attention at this hour on previous days — that multiple is the Anomaly Z column.
+      It needs at least six prior samples to qualify, which is why genuinely new events often take
+      several hours to appear here.
+    </p>
   </section>
 </main>
 <footer>
