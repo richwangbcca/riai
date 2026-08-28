@@ -67,3 +67,53 @@ def test_scoring_pipeline_smoke():
     assert row is not None
     assert 0.0 <= row["attention_index"] <= 1.0
     assert row["emerging"] in (0, 1)
+
+
+def _dists(values_by_signal):
+    return {k: sorted(v) for k, v in values_by_signal.items()}
+
+
+def test_percentile_rank_orders_within_the_field():
+    d = _dists({("wikipedia", "edit_count"): [1.0, 1.0, 2.0, 50.0]})
+    rank = lambda v: score._percentile_rank(d, "wikipedia", "edit_count", v)
+    assert rank(1.0) < rank(2.0) < rank(50.0)
+    assert 0.0 <= rank(1.0) and rank(50.0) <= 1.0
+
+
+def test_percentile_rank_ties_share_the_midpoint():
+    """All-identical values must tie, not be ordered arbitrarily at zero."""
+    d = _dists({("wikipedia", "edit_count"): [3.0] * 8})
+    assert score._percentile_rank(d, "wikipedia", "edit_count", 3.0) == 0.5
+
+
+def test_percentile_rank_handles_unseen_signal():
+    assert score._percentile_rank({}, "reddit", "post_velocity", 9.0) == 0.0
+
+
+def test_baseline_without_variance_falls_back_to_the_field():
+    """A low-traffic page edited once an hour has std=0 forever. That used to
+    return the constant logistic(1.0) for every such topic regardless of size,
+    which is what produced multi-way ties at the top of the index."""
+    import sqlite3
+    import storage
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    storage._apply_schema(conn)
+    bucket = storage.hour_bucket()
+
+    # Three topics, flat identical histories (std == 0), different current values.
+    for tid, current in (("small", 1.0), ("mid", 5.0), ("big", 99.0)):
+        storage.upsert_topic(conn, tid, tid)
+        storage.upsert_signal(conn, tid, bucket, "wikipedia", "edit_count", current)
+    conn.commit()
+
+    dists = score._load_bucket_distributions(conn, bucket)
+    cfg = {"baseline_days": 7, "logistic_k": 1.0, "logistic_midpoint": 2.0}
+    norm = lambda tid, v: score._zscore_normalize(
+        conn, tid, "wikipedia", "edit_count", v, cfg, dists
+    )
+
+    small, mid, big = norm("small", 1.0), norm("mid", 5.0), norm("big", 99.0)
+    assert small < mid < big, "no-baseline topics must be ordered, not tied"
+    assert big <= score._FALLBACK_CEILING, "must not outrank a confirmed anomaly"

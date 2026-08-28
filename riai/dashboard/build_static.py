@@ -235,9 +235,12 @@ footer{{padding:16px 24px;border-top:1px solid #30363d;color:#8b949e;font-size:1
     <p class="cav">
       The four sources are weighted Wikipedia 40%, news 35%, Reddit 20%, search 5% (defaults; set in
       <code>config.yaml</code>). Search is not implemented and contributes nothing, so in practice
-      scores top out near 0.95. A topic with no baseline to compare against yet gets a fixed low
-      placeholder for that signal rather than a real score, and a topic seen in only a handful of
-      events is separately marked ~.
+      scores top out near 0.95. A topic seen in only a handful of events is marked ~.
+    </p>
+    <p class="cav">
+      Some topics have no usable history to compare against — brand new, or so steady that they have
+      no normal variation. Those are ranked against everything else active at that moment instead,
+      and capped at half the range, so a topic we cannot call unusual never outranks one we can.
     </p>
 
     <h3>Momentum</h3>
