@@ -1,0 +1,9 @@
+.git
+# Must be **/.env: dockerignore matches the path relative to the build context,
+# so a bare ".env" excludes only the root one and would let riai/.env -- the
+# real key -- get baked into an image layer by COPY . .
+**/.env
+**/__pycache__
+**/.pytest_cache
+# *.db* not *.db -- the WAL sidecar is 21 MB and does not match the bare pattern.
+riai/*.db*

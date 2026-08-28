@@ -1,0 +1,20 @@
+app = "riai"
+primary_region = "iad"
+
+[build]
+
+[mounts]
+  source = "riai_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Poller must run continuously — never let Fly stop the machine.
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
