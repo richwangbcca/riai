@@ -22,6 +22,11 @@ log = logging.getLogger(__name__)
 
 _GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
+# How far back evidence is gathered. Doubles as the shelf life of a summary:
+# once the headlines and edits behind a blurb have left this window, the blurb
+# is describing something we can no longer show, so it gets dropped.
+_EVIDENCE_HOURS = 24
+
 _INSTRUCTIONS = """\
 You are helping users of a news attention tracker understand why topics are trending.
 
@@ -80,7 +85,7 @@ def _fetch_coverage(
         GROUP BY title
         ORDER BY latest_ts DESC
         """,
-        (topic_id, name, "-24"),
+        (topic_id, name, f"-{_EVIDENCE_HOURS}"),
     ).fetchall()
     titles = [r["title"] for r in rows if r["title"]]
     return titles[:n], len(titles)
@@ -108,7 +113,7 @@ def _fetch_edit_comments(
         ORDER BY latest_ts DESC
         LIMIT ?
         """,
-        (topic_id, "-24", n),
+        (topic_id, f"-{_EVIDENCE_HOURS}", n),
     ).fetchall()
 
     out = []
@@ -132,6 +137,60 @@ def _build_topic_block(
         lines.append("Recent Wikipedia edit summaries:")
         lines.extend(f"  - {c}" for c in comments)
     return "\n".join(lines)
+
+
+def _drop_stale_summaries(conn: sqlite3.Connection) -> int:
+    """Remove blurbs that no longer have evidence behind them.
+
+    This module only ever inserted rows, so a summary outlived whatever
+    justified it and sat on the dashboard until retention purged the topic
+    days later. That is how "Michael L. Chyet is receiving search attention"
+    -- invented wholesale from an article title, naming a source that is not
+    even implemented -- stayed on the page long after the code that produced
+    it was replaced.
+
+    Every summarized topic is checked, not just the top N being regenerated
+    this cycle. The dashboard shows more topics than are summarized, so a
+    blurb that slips below the summarize cutoff would otherwise never be
+    revisited -- which is exactly how that one survived.
+
+    The age cap catches the remaining case: a topic that still has evidence
+    but was not regenerated, whose blurb describes headlines that have since
+    rolled out of the window.
+    """
+    # ponytail: two indexed lookups per summarized topic, ~550ms for 239 rows on
+    # a 10-minute cycle. Retention caps the table, so this stays small; if it
+    # ever does not, replace the per-topic checks with one grouped join.
+    rows = conn.execute(
+        "SELECT s.topic_id, t.canonical_name FROM topic_summaries s "
+        "JOIN topics t USING (topic_id)"
+    ).fetchall()
+
+    unexplained = [
+        r["topic_id"]
+        for r in rows
+        if not _fetch_coverage(conn, r["topic_id"], r["canonical_name"])[0]
+        and not _fetch_edit_comments(conn, r["topic_id"])
+    ]
+
+    removed = 0
+    if unexplained:
+        cur = conn.executemany(
+            "DELETE FROM topic_summaries WHERE topic_id = ?",
+            [(t,) for t in unexplained],
+        )
+        removed += cur.rowcount
+
+    cur = conn.execute(
+        f"DELETE FROM topic_summaries WHERE updated_at < {storage.cutoff_sql('hours')}",
+        (f"-{_EVIDENCE_HOURS}",),
+    )
+    removed += cur.rowcount
+    conn.commit()
+
+    if removed:
+        log.info("Cleared %d summaries with no current evidence", removed)
+    return removed
 
 
 def generate_summaries(conn: sqlite3.Connection, cfg: dict[str, Any]) -> int:
@@ -176,6 +235,8 @@ def generate_summaries(conn: sqlite3.Connection, cfg: dict[str, Any]) -> int:
         topic_blocks.append(
             _build_topic_block(r["canonical_name"], headlines, coverage, comments)
         )
+
+    _drop_stale_summaries(conn)
 
     if not topics:
         log.info("No topics with recent context; skipping summarization")

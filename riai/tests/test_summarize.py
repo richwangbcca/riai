@@ -181,6 +181,51 @@ def test_wikipedia_only_topic_is_summarized_from_edit_comments(monkeypatch):
     }
 
 
+def _set_summary(conn, topic_id, summary, updated_at):
+    conn.execute(
+        "INSERT OR REPLACE INTO topic_summaries(topic_id, summary, updated_at) VALUES (?,?,?)",
+        (topic_id, summary, updated_at),
+    )
+    conn.commit()
+
+
+def test_summary_is_dropped_when_its_evidence_is_gone(monkeypatch):
+    """A blurb must not outlive what justified it — this is how an invented
+    "receiving search attention" line survived on the dashboard for days."""
+    conn = _fresh_db()
+    _seed(conn, "chyet", "Michael L. Chyet", 0.9, [])
+    _add_event(conn, "chyet", "wikipedia", "Michael L. Chyet")  # title only, no comment
+    _set_summary(conn, "chyet", "receiving search attention", storage.now_utc())
+
+    def explode(*a, **kw):
+        raise AssertionError("should not call the API with no evidence")
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(summarize.requests, "post", explode)
+    assert summarize.generate_summaries(conn, {}) == 0
+
+    assert conn.execute("SELECT COUNT(*) FROM topic_summaries").fetchone()[0] == 0
+
+
+def test_summary_older_than_the_evidence_window_is_dropped(monkeypatch):
+    """The dashboard shows more topics than are summarized each cycle, so a
+    blurb below the cutoff can sit unrefreshed indefinitely."""
+    conn = _fresh_db()
+    _seed(conn, "fresh", "Fresh", 0.9, ["Something happened"])
+    _seed(conn, "forgotten", "Forgotten", 0.1, [])
+    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=30)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    _set_summary(conn, "forgotten", "explained 30 hours ago", stale_ts)
+    _set_summary(conn, "fresh", "still current", storage.now_utc())
+
+    _run(monkeypatch, conn, {}, n_summaries=1)
+
+    rows = dict(conn.execute("SELECT topic_id, summary FROM topic_summaries"))
+    assert "forgotten" not in rows
+    assert rows["fresh"] == "summary 0"  # regenerated, not dropped
+
+
 def test_api_key_is_sent_as_header_not_in_url(monkeypatch):
     """The key must stay out of the URL — request URLs end up in warning logs."""
     conn = _fresh_db()
