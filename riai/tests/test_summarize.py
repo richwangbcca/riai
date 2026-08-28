@@ -2,6 +2,7 @@
 import json
 import sqlite3
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -43,6 +44,23 @@ def _seed(conn, topic_id, name, index, headlines):
             url=None,
             topic_id=topic_id,
         )
+    conn.commit()
+
+
+def _add_event(conn, topic_id, source, title, minutes_ago=0, comment=None):
+    ts = (
+        datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    storage.insert_event(
+        conn,
+        source=source,
+        external_id=f"{topic_id}-{source}-{title}-{comment}",
+        ts=ts,
+        title=title,
+        url=None,
+        topic_id=topic_id,
+        raw={"comment": comment} if comment else None,
+    )
     conn.commit()
 
 
@@ -104,6 +122,63 @@ def test_top_n_comes_from_config(monkeypatch):
 
     assert "Topic 0" in prompt and "Topic 1" in prompt
     assert "Topic 2" not in prompt
+
+
+def test_wikipedia_titles_never_appear_as_coverage(monkeypatch):
+    """A wiki event's title is the article name — presenting it as a headline
+    is how "1958 in film" got explained by "1977 in film"."""
+    conn = _fresh_db()
+    _seed(conn, "iran", "Iran", 0.9, [])
+    # Wiki events are newer and outnumber the 5-headline budget, so plain
+    # recency ordering would bury the one real headline.
+    _add_event(conn, "iran", "news", "Talks collapse over enrichment deal", minutes_ago=60)
+    for i in range(6):
+        _add_event(conn, "iran", "wikipedia", f"Iran-related article {i}", minutes_ago=i + 1)
+
+    prompt = _run(monkeypatch, conn, {}, n_summaries=1)
+
+    assert "Talks collapse over enrichment deal" in prompt
+    assert "Iran-related article" not in prompt
+
+
+def test_coverage_count_reflects_all_articles_not_just_the_sample(monkeypatch):
+    """"Lots of news" is itself the signal, and the 5-headline sample hides it."""
+    conn = _fresh_db()
+    _seed(conn, "quake", "Quake", 0.9, [])
+    for i in range(9):
+        _add_event(conn, "quake", "news", f"Quake headline {i}", minutes_ago=i)
+
+    prompt = _run(monkeypatch, conn, {}, n_summaries=1)
+
+    assert "(9 in last 24h)" in prompt
+    assert prompt.count("  - Quake headline") == 5  # sample stays capped
+
+
+def test_title_echoing_the_topic_name_is_not_context(monkeypatch):
+    conn = _fresh_db()
+    _seed(conn, "iran", "Iran", 0.9, [])
+    _add_event(conn, "iran", "wikipedia", "iran")  # bare article name, any case
+
+    def explode(*a, **kw):
+        raise AssertionError("a topic whose only 'headline' is its own name has no context")
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(summarize.requests, "post", explode)
+    assert summarize.generate_summaries(conn, {}) == 0
+
+
+def test_wikipedia_only_topic_is_summarized_from_edit_comments(monkeypatch):
+    """Attention without news coverage is still attention — don't drop it."""
+    conn = _fresh_db()
+    _seed(conn, "someone", "Someone", 0.9, [])
+    _add_event(conn, "someone", "wikipedia", "Someone", comment="/* Death */ add date")
+
+    prompt = _run(monkeypatch, conn, {}, n_summaries=1)
+
+    assert "Death: add date" in prompt  # section marker kept, reformatted
+    assert dict(conn.execute("SELECT topic_id, summary FROM topic_summaries")) == {
+        "someone": "summary 0"
+    }
 
 
 def test_api_key_is_sent_as_header_not_in_url(monkeypatch):

@@ -182,7 +182,10 @@ def _wikipedia_stream_thread(
             ts=ev["ts"],
             title=ev["title"],
             url=ev["url"],
-            raw=None,
+            # The edit comment is the only text a Wikipedia event carries -- the
+            # title is just the article name. For a topic spiking on edits with
+            # no news coverage, it's the only honest answer to "why?".
+            raw={"comment": ev["comment"]} if ev["comment"] else None,
             matching_cfg=matching_cfg,
             wikipedia_title=ev["title"],
         )

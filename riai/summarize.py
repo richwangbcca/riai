@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from typing import Any
 
@@ -24,33 +25,112 @@ _GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:g
 _INSTRUCTIONS = """\
 You are helping users of a news attention tracker understand why topics are trending.
 
-For each topic below I will give you the topic name and up to 5 recent headlines \
-associated with it. Write exactly one sentence (under 20 words) explaining why it \
-is getting attention right now. Be specific — name the event, person, or development \
-driving the attention. If the headlines are too vague to be specific, write a \
-brief general description.
+For each topic below I will give you the topic name and whatever recent evidence we \
+have for it. Write exactly one sentence (under 20 words) explaining why it is getting \
+attention right now. Be specific — name the event, person, or development driving it.
+
+The evidence comes in two forms, and they are not equally strong:
+
+- "News/Reddit coverage" are published articles and posts, with a count of how many \
+appeared in the last 24 hours. This is the strongest evidence available. A high count \
+means something real happened, so lead with it and treat everything else as detail.
+
+- "Recent Wikipedia edit summaries" are notes editors wrote describing their own \
+changes to the article. Most edits are routine upkeep — typos, copyedits, formatting, \
+wikilinks, categories, reverts, reference fixes. Upkeep is not why anything trends. \
+Ignore those and use the substantive edits (a death date, a result, a new section, a \
+rename). If upkeep is all there is, do not describe the cleanup; say attention is \
+rising without a clear cause.
+
+The two are asymmetric. Heavy coverage is strong positive evidence. No coverage is \
+not evidence of the opposite — plenty of topics draw real attention with nothing \
+written about them yet, so a missing coverage section is normal and means only that \
+you must not imply articles exist.
+
+Never invent an event the evidence does not mention. If the evidence is too thin to \
+say why, describe what the topic is and note that activity is rising — a vague but \
+true sentence beats a specific but invented one.
 
 Respond with a JSON array of strings, one per topic, in the same order as the input.\
 """
 
 
-def _fetch_topic_headlines(conn: sqlite3.Connection, topic_id: str, n: int = 5) -> list[str]:
+def _fetch_coverage(
+    conn: sqlite3.Connection, topic_id: str, name: str, n: int = 5
+) -> tuple[list[str], int]:
+    """Recent news/Reddit headlines, newest first, plus how many there are.
+
+    Wikipedia events are deliberately excluded: their title is the article name,
+    not a headline, so "1958 in film" would be handed to the model as a news
+    headline about "1977 in film". Wikipedia speaks through _fetch_edit_comments
+    instead.
+
+    The count matters separately from the sample. Heavy coverage is positive
+    evidence that something actually happened, and the model can't infer that
+    from a list capped at `n`. Light coverage is not evidence of the opposite —
+    a topic can draw real attention with no articles at all.
+    """
     rows = conn.execute(
         f"""
-        SELECT DISTINCT title FROM events
-        WHERE topic_id = ? AND title IS NOT NULL
+        SELECT title, MAX(ts) AS latest_ts
+        FROM events
+        WHERE topic_id = ? AND source IN ('news', 'reddit') AND title IS NOT NULL
+          AND lower(title) != lower(?)
           AND ts >= {storage.cutoff_sql('hours')}
-        ORDER BY ts DESC
+        GROUP BY title
+        ORDER BY latest_ts DESC
+        """,
+        (topic_id, name, "-24"),
+    ).fetchall()
+    titles = [r["title"] for r in rows if r["title"]]
+    return titles[:n], len(titles)
+
+
+_SECTION_RE = re.compile(r"/\*\s*(.*?)\s*\*/")
+
+
+def _fetch_edit_comments(
+    conn: sqlite3.Connection, topic_id: str, n: int = 5
+) -> list[str]:
+    """Recent Wikipedia edit summaries — what editors say they changed.
+
+    A topic can spike on edits and pageviews with no news coverage at all; that
+    is a real attention signal, not noise. The edit summary is the only text
+    those events carry, so it's the only honest answer to "why is this trending".
+    """
+    rows = conn.execute(
+        f"""
+        SELECT json_extract(raw, '$.comment') AS comment, MAX(ts) AS latest_ts
+        FROM events
+        WHERE topic_id = ? AND source = 'wikipedia' AND raw IS NOT NULL
+          AND ts >= {storage.cutoff_sql('hours')}
+        GROUP BY comment
+        ORDER BY latest_ts DESC
         LIMIT ?
         """,
         (topic_id, "-24", n),
     ).fetchall()
-    return [r["title"] for r in rows if r["title"]]
+
+    out = []
+    for r in rows:
+        # "/* Death */ add date" -> "Death: add date"; the section name is often
+        # the most informative part, so keep it rather than stripping the marker.
+        comment = _SECTION_RE.sub(r"\1:", r["comment"] or "").strip()
+        if len(comment) > 2:
+            out.append(comment)
+    return out
 
 
-def _build_topic_block(name: str, headlines: list[str]) -> str:
-    lines = [f"Topic: {name}", "Recent headlines:"]
-    lines.extend(f"  - {h}" for h in headlines)
+def _build_topic_block(
+    name: str, headlines: list[str], coverage_count: int, comments: list[str]
+) -> str:
+    lines = [f"Topic: {name}"]
+    if headlines:
+        lines.append(f"News/Reddit coverage ({coverage_count} in last 24h):")
+        lines.extend(f"  - {h}" for h in headlines)
+    if comments:
+        lines.append("Recent Wikipedia edit summaries:")
+        lines.extend(f"  - {c}" for c in comments)
     return "\n".join(lines)
 
 
@@ -86,14 +166,19 @@ def generate_summaries(conn: sqlite3.Connection, cfg: dict[str, Any]) -> int:
     topics: list[tuple[str, str]] = []
     topic_blocks: list[str] = []
     for r in rows:
-        headlines = _fetch_topic_headlines(conn, r["topic_id"])
-        if not headlines:
+        headlines, coverage = _fetch_coverage(
+            conn, r["topic_id"], r["canonical_name"]
+        )
+        comments = _fetch_edit_comments(conn, r["topic_id"])
+        if not headlines and not comments:
             continue
         topics.append((r["topic_id"], r["canonical_name"]))
-        topic_blocks.append(_build_topic_block(r["canonical_name"], headlines))
+        topic_blocks.append(
+            _build_topic_block(r["canonical_name"], headlines, coverage, comments)
+        )
 
     if not topics:
-        log.info("No topics with recent headlines; skipping summarization")
+        log.info("No topics with recent context; skipping summarization")
         return 0
 
     dynamic_content = "\n\n".join(topic_blocks)
